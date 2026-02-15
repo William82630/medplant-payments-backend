@@ -34,18 +34,23 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { amount, currency = 'INR', receipt } = req.body;
+    const { amount, currency = 'INR' } = req.body;
 
     if (!amount) {
       return res.status(400).json({ error: 'Amount is required' });
     }
 
-    /* ---------- ORDER CREATION (SUCCESS POINT) ---------- */
-    const order = await razorpay.orders.create({
+    /* ---------- ORDER CREATION ---------- */
+    const orderParams: any = {
       amount: Number(amount),
       currency,
-      receipt,
-    });
+    };
+
+    console.log('[create-order] Creating order with params:', JSON.stringify(orderParams));
+
+    const order = await razorpay.orders.create(orderParams);
+
+    console.log('[create-order] Order created:', order.id, 'amount:', order.amount);
 
     /* ---------- ANALYTICS (NON-BLOCKING) ---------- */
     supabase
@@ -69,8 +74,8 @@ export default async function handler(req: any, res: any) {
       },
     });
 
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to create order' });
+  } catch (err: any) {
+    console.error('[create-order] ERROR:', err?.error || err?.message || err);
+    return res.status(500).json({ error: 'Failed to create order', details: err?.error?.description || err?.message });
   }
 }
