@@ -59,7 +59,15 @@ export default async function handler(req: any, res: any) {
       });
 
     /* ---------- RESPONSE ---------- */
-    return res.status(200).json(order);
+    return res.status(200).json({
+      success: true,
+      data: {
+        order_id: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        key_id: process.env.RAZORPAY_KEY_ID,
+      },
+    });
 
   } catch (err) {
     console.error(err);

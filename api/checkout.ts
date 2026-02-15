@@ -60,7 +60,13 @@ export default async function handler(req: any, res: any) {
     <h2>Loading Payment...</h2>
     <p>Please wait while we set up your secure checkout.</p>
   </div>
-  <script src="https://checkout.razorpay.com/v1/checkout.js"><\/script>
+  <script>
+    // Suppress ALL alert/confirm/prompt popups — Razorpay checkout.js uses alert() on errors
+    window.alert = function(msg) { console.warn('[Checkout] Suppressed alert:', msg); };
+    window.confirm = function(msg) { console.warn('[Checkout] Suppressed confirm:', msg); return true; };
+    window.prompt = function(msg) { console.warn('[Checkout] Suppressed prompt:', msg); return null; };
+  <\\/script>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"><\\/script>
   <script>
     var params = new URLSearchParams(window.location.search);
     var key = params.get('key');
@@ -77,13 +83,7 @@ export default async function handler(req: any, res: any) {
     var cancelUrl = callback.replace('payment-success', 'payment-cancelled');
     var failBaseUrl = callback.replace('payment-success', 'payment-failed');
 
-    console.log('[Checkout] key:', key);
-    console.log('[Checkout] order_id:', order_id);
-    console.log('[Checkout] amount:', amount);
-    console.log('[Checkout] currency:', currency);
-    console.log('[Checkout] callback:', callback);
-    console.log('[Checkout] cancelUrl:', cancelUrl);
-    console.log('[Checkout] failBaseUrl:', failBaseUrl);
+    console.log('[Checkout] Params:', JSON.stringify({key: key, order_id: order_id, amount: amount, currency: currency, email: email}));
 
     function showError(msg) {
       document.getElementById('content').innerHTML =
@@ -92,32 +92,34 @@ export default async function handler(req: any, res: any) {
         '<a class="btn" href="' + failBaseUrl + '">Return to App</a>';
     }
 
-    if (!key || !order_id || !amount) {
+    if (!key || !order_id) {
       showError('Missing payment details. Please try again from the app.');
     } else {
       try {
+        // Razorpay options — when order_id is provided, Razorpay fetches amount/currency from the order.
+        // Do NOT pass amount separately to avoid mismatch errors.
         var options = {
           key: key,
-          amount: amount,
-          currency: currency,
+          order_id: order_id,
           name: name,
           description: description,
-          order_id: order_id,
           prefill: { email: email },
           theme: { color: '#00C896' },
           handler: function(response) {
+            console.log('[Checkout] Payment success:', JSON.stringify(response));
             var successUrl = callback +
               '?razorpay_payment_id=' + encodeURIComponent(response.razorpay_payment_id) +
               '&razorpay_order_id=' + encodeURIComponent(response.razorpay_order_id) +
               '&razorpay_signature=' + encodeURIComponent(response.razorpay_signature);
             document.getElementById('content').innerHTML =
-              '<h2>\\u2713 Payment Successful!</h2>' +
+              '<h2>Payment Successful!</h2>' +
               '<p>Redirecting back to MedPlant...</p>' +
               '<a class="btn" href="' + successUrl + '">Return to App</a>';
             setTimeout(function() { window.location.href = successUrl; }, 1500);
           },
           modal: {
             ondismiss: function() {
+              console.log('[Checkout] Modal dismissed by user');
               document.getElementById('content').innerHTML =
                 '<h2>Payment Cancelled</h2>' +
                 '<p>You cancelled the payment.</p>' +
@@ -125,8 +127,10 @@ export default async function handler(req: any, res: any) {
             }
           }
         };
+        console.log('[Checkout] Razorpay options:', JSON.stringify(options));
         var rzp = new Razorpay(options);
         rzp.on('payment.failed', function(response) {
+          console.error('[Checkout] Payment failed:', JSON.stringify(response.error));
           var failUrl = failBaseUrl +
             '?error=' + encodeURIComponent(response.error.description) +
             '&code=' + encodeURIComponent(response.error.code);
@@ -135,10 +139,11 @@ export default async function handler(req: any, res: any) {
         });
         setTimeout(function() { rzp.open(); }, 500);
       } catch (e) {
+        console.error('[Checkout] Init error:', e);
         showError('Failed to initialize payment: ' + e.message);
       }
     }
-  <\/script>
+  <\\/script>
 </body>
 </html>`;
 
