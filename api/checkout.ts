@@ -70,13 +70,15 @@ export default async function handler(req: any, res: any) {
     var name = params.get('name') || 'MedPlant';
     var description = params.get('description') || 'Pro Subscription';
     var email = params.get('email') || '';
-    var callback = params.get('callback') || 'medplant://';
+    var callback = params.get('callback') || 'medplant://payment-success';
+    var cancelUrl = callback.replace('payment-success', 'payment-cancelled');
+    var failBaseUrl = callback.replace('payment-success', 'payment-failed');
 
     function showError(msg) {
       document.getElementById('content').innerHTML =
         '<h2>Payment Error</h2>' +
         '<p class="error">' + msg + '</p>' +
-        '<a class="btn" href="' + callback + 'payment-failed">Return to App</a>';
+        '<a class="btn" href="' + failBaseUrl + '">Return to App</a>';
     }
 
     if (!key || !order_id || !amount) {
@@ -93,7 +95,7 @@ export default async function handler(req: any, res: any) {
           prefill: { email: email },
           theme: { color: '#00C896' },
           handler: function(response) {
-            var successUrl = callback + 'payment-success' +
+            var successUrl = callback +
               '?razorpay_payment_id=' + encodeURIComponent(response.razorpay_payment_id) +
               '&razorpay_order_id=' + encodeURIComponent(response.razorpay_order_id) +
               '&razorpay_signature=' + encodeURIComponent(response.razorpay_signature);
@@ -108,13 +110,13 @@ export default async function handler(req: any, res: any) {
               document.getElementById('content').innerHTML =
                 '<h2>Payment Cancelled</h2>' +
                 '<p>You cancelled the payment.</p>' +
-                '<a class="btn" href="' + callback + 'payment-cancelled">Return to App</a>';
+                '<a class="btn" href="' + cancelUrl + '">Return to App</a>';
             }
           }
         };
         var rzp = new Razorpay(options);
         rzp.on('payment.failed', function(response) {
-          var failUrl = callback + 'payment-failed' +
+          var failUrl = failBaseUrl +
             '?error=' + encodeURIComponent(response.error.description) +
             '&code=' + encodeURIComponent(response.error.code);
           showError(response.error.description);
