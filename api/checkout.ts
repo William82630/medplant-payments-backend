@@ -70,9 +70,20 @@ export default async function handler(req: any, res: any) {
     var name = params.get('name') || 'MedPlant';
     var description = params.get('description') || 'Pro Subscription';
     var email = params.get('email') || '';
-    var callback = params.get('callback') || 'medplant://payment-success';
+    var callback = params.get('callback');
+    if (!callback || callback === 'null' || callback === 'undefined') {
+      callback = 'medplant://payment-success';
+    }
     var cancelUrl = callback.replace('payment-success', 'payment-cancelled');
     var failBaseUrl = callback.replace('payment-success', 'payment-failed');
+
+    console.log('[Checkout] key:', key);
+    console.log('[Checkout] order_id:', order_id);
+    console.log('[Checkout] amount:', amount);
+    console.log('[Checkout] currency:', currency);
+    console.log('[Checkout] callback:', callback);
+    console.log('[Checkout] cancelUrl:', cancelUrl);
+    console.log('[Checkout] failBaseUrl:', failBaseUrl);
 
     function showError(msg) {
       document.getElementById('content').innerHTML =
