@@ -86,13 +86,14 @@ export default async function handler(req: any, res: any) {
     var description = params.get('description') || 'Pro Subscription';
     var email = params.get('email') || '';
     var callback = params.get('callback');
+    var redirect_url = params.get('redirect_url');
     if (!callback || callback === 'null' || callback === 'undefined') {
       callback = 'medplant://payment-success';
     }
     var cancelUrl = callback.replace('payment-success', 'payment-cancelled');
     var failBaseUrl = callback.replace('payment-success', 'payment-failed');
 
-    console.log('[Checkout] Params:', JSON.stringify({key: key, order_id: order_id, amount: amount, currency: currency, email: email}));
+    console.log('[Checkout] Params:', JSON.stringify({key: key, order_id: order_id, redirect_url: redirect_url, email: email}));
 
     function showError(msg) {
       document.getElementById('content').innerHTML =
@@ -104,11 +105,9 @@ export default async function handler(req: any, res: any) {
     if (!key || !order_id) {
       showError('Missing payment details. Please try again from the app.');
     } else {
-      // Safety timeout — if Razorpay modal doesn't appear within 15 seconds, show error
       var rzpOpened = false;
       var safetyTimeout = setTimeout(function() {
         if (!rzpOpened) {
-          console.error('[Checkout] Razorpay modal did not open within 15s');
           showError('Payment gateway timed out. Please close this page and try again.');
         }
       }, 15000);
@@ -121,10 +120,26 @@ export default async function handler(req: any, res: any) {
           description: description,
           prefill: { email: email },
           theme: { color: '#00C896' },
-          handler: function(response) {
+          modal: {
+            ondismiss: function() {
+              clearTimeout(safetyTimeout);
+              document.getElementById('content').innerHTML =
+                '<h2>Payment Cancelled</h2>' +
+                '<p>You cancelled the payment.</p>' +
+                '<a class="btn" href="' + cancelUrl + '">Return to App</a>';
+            }
+          }
+        };
+
+        // Mobile flow: use callback_url for reliable redirect via server
+        // Web flow: use handler for inline success handling
+        if (redirect_url) {
+          options.callback_url = redirect_url;
+          console.log('[Checkout] Using callback_url (mobile):', redirect_url);
+        } else {
+          options.handler = function(response) {
             rzpOpened = true;
             clearTimeout(safetyTimeout);
-            console.log('[Checkout] Payment success:', JSON.stringify(response));
             var successUrl = callback +
               '?razorpay_payment_id=' + encodeURIComponent(response.razorpay_payment_id) +
               '&razorpay_order_id=' + encodeURIComponent(response.razorpay_order_id) +
@@ -134,28 +149,19 @@ export default async function handler(req: any, res: any) {
               '<p>Redirecting back to MedPlant...</p>' +
               '<a class="btn" href="' + successUrl + '">Return to App</a>';
             setTimeout(function() { window.location.href = successUrl; }, 1500);
-          },
-          modal: {
-            ondismiss: function() {
-              clearTimeout(safetyTimeout);
-              console.log('[Checkout] Modal dismissed by user');
-              document.getElementById('content').innerHTML =
-                '<h2>Payment Cancelled</h2>' +
-                '<p>You cancelled the payment.</p>' +
-                '<a class="btn" href="' + cancelUrl + '">Return to App</a>';
-            }
-          }
-        };
-        console.log('[Checkout] Razorpay options:', JSON.stringify(options));
+          };
+          console.log('[Checkout] Using handler (web)');
+        }
+
         var rzp = new Razorpay(options);
         rzp.on('payment.failed', function(response) {
           clearTimeout(safetyTimeout);
-          console.error('[Checkout] Payment failed:', JSON.stringify(response.error));
           var failUrl = failBaseUrl +
             '?error=' + encodeURIComponent(response.error.description) +
             '&code=' + encodeURIComponent(response.error.code);
           showError(response.error.description);
-          document.querySelector('.btn').href = failUrl;
+          var btn = document.querySelector('.btn');
+          if (btn) btn.href = failUrl;
         });
         setTimeout(function() {
           try {
@@ -163,14 +169,12 @@ export default async function handler(req: any, res: any) {
             rzpOpened = true;
             clearTimeout(safetyTimeout);
           } catch (openErr) {
-            console.error('[Checkout] rzp.open() error:', openErr);
             showError('Failed to open payment: ' + openErr.message);
             clearTimeout(safetyTimeout);
           }
         }, 500);
       } catch (e) {
         clearTimeout(safetyTimeout);
-        console.error('[Checkout] Init error:', e);
         showError('Failed to initialize payment: ' + e.message);
       }
     }
