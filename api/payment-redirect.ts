@@ -40,7 +40,7 @@ async function activateSubscription(userId: string, planId: string, paymentId: s
       .from('user_subscriptions')
       .select('daily_credits') // Using daily_credits as balance based on app logic
       .eq('user_id', userId)
-      .single();
+      .maybeSingle();
 
     const current = sub?.daily_credits || 0;
     const newBalance = current + credits;
