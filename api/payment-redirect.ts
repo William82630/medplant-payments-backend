@@ -24,69 +24,64 @@ async function activateSubscription(userId: string, planId: string, paymentId: s
   console.log(`[payment-redirect] Activating ${planId} for ${userId}`);
   const now = new Date();
 
-  try {
-    // 1. Credit Packs
-    if (planId.startsWith('pack_')) {
-      let credits = 0;
-      switch (planId) {
-        case 'pack_1': credits = 1; break;
-        case 'pack_10': credits = 10; break;
-        case 'pack_20': credits = 20; break;
-        case 'pack_30': credits = 30; break;
-        default: credits = 1;
-      }
-
-      // Fetch current
-      const { data: sub } = await supabase
-        .from('user_subscriptions')
-        .select('daily_credits') // Using daily_credits as balance based on app logic
-        .eq('user_id', userId)
-        .single();
-
-      const current = sub?.daily_credits || 0;
-      const newBalance = current + credits;
-
-      // Update
-      await supabase.from('user_subscriptions').upsert({
-        user_id: userId,
-        daily_credits: newBalance,
-        updated_at: now.toISOString()
-      }, { onConflict: 'user_id' });
-
-      console.log(`[payment-redirect] Added ${credits} credits. New balance: ${newBalance}`);
+  // 1. Credit Packs
+  if (planId.startsWith('pack_')) {
+    let credits = 0;
+    switch (planId) {
+      case 'pack_1': credits = 1; break;
+      case 'pack_10': credits = 10; break;
+      case 'pack_20': credits = 20; break;
+      case 'pack_30': credits = 30; break;
+      default: credits = 1;
     }
 
-    // 2. Pro Plans
-    else if (planId.startsWith('pro_')) {
-      const isYearly = planId.includes('yearly');
-      const days = isYearly ? 365 : 30;
-      const expires = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-      const credits = planId === 'pro_basic' ? 30 : 999999; // 30 for basic, unlimited for others
+    // Fetch current
+    const { data: sub } = await supabase
+      .from('user_subscriptions')
+      .select('daily_credits') // Using daily_credits as balance based on app logic
+      .eq('user_id', userId)
+      .single();
 
-      // Update Subscription
-      await supabase.from('user_subscriptions').upsert({
-        user_id: userId,
-        plan: planId,
-        is_pro: true,
-        daily_credits: credits,
-        subscription_id: paymentId,
-        plan_start_date: now.toISOString(),
-        plan_end_date: expires.toISOString(),
-        updated_at: now.toISOString(),
-      }, { onConflict: 'user_id' });
+    const current = sub?.daily_credits || 0;
+    const newBalance = current + credits;
 
-      // Update Profile
-      await supabase.from('user_profiles').update({
-        is_pro: true,
-        pro_since: now.toISOString(),
-        pro_expires: expires.toISOString(),
-      }).eq('id', userId);
+    // Update
+    await supabase.from('user_subscriptions').upsert({
+      user_id: userId,
+      daily_credits: newBalance,
+      updated_at: now.toISOString()
+    }, { onConflict: 'user_id' });
 
-      console.log(`[payment-redirect] Activated ${planId}`);
-    }
-  } catch (err) {
-    console.error('[payment-redirect] Activation Failed:', err);
-    // We don't block redirect, but we log the error
+    console.log(`[payment-redirect] Added ${credits} credits. New balance: ${newBalance}`);
+  }
+
+  // 2. Pro Plans
+  else if (planId.startsWith('pro_')) {
+    const isYearly = planId.includes('yearly');
+    const days = isYearly ? 365 : 30;
+    const expires = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+    const credits = planId === 'pro_basic' ? 30 : 999999; // 30 for basic, unlimited for others
+
+    // Update Subscription
+    await supabase.from('user_subscriptions').upsert({
+      user_id: userId,
+      plan: planId,
+      is_pro: true,
+      daily_credits: credits,
+      subscription_id: paymentId,
+      plan_start_date: now.toISOString(),
+      plan_end_date: expires.toISOString(),
+      updated_at: now.toISOString(),
+    }, { onConflict: 'user_id' });
+
+    // Update Profile
+    await supabase.from('user_profiles').update({
+      is_pro: true,
+      pro_since: now.toISOString(),
+      pro_expires: expires.toISOString(),
+    }).eq('id', userId);
+
+    console.log(`[payment-redirect] Activated ${planId}`);
   }
 }
 
@@ -105,6 +100,7 @@ export default async function handler(req: any, res: any) {
   console.log('[payment-redirect] Received:', JSON.stringify({ paymentId, orderId, signature, error, status }));
 
   let deepLink: string;
+  let debugStatus = 'Init';
 
   if (error || status === 'failed') {
     deepLink = `medplant://payment-failed?error=${encodeURIComponent(error || 'Payment failed')}`;
@@ -121,28 +117,40 @@ export default async function handler(req: any, res: any) {
         .digest('hex');
 
       if (expectedSignature === signature) {
+        debugStatus = 'SigVerified';
         console.log('[payment-redirect] Signature Verified. Fetching order...');
+
         // 2. Fetch Order to get User Context
         const order = await razorpay.orders.fetch(orderId);
 
         if (order.notes && order.notes.user_id && order.notes.plan_id) {
+          debugStatus = 'NotesFound';
           // 3. Activate Subscription
-          await activateSubscription(
-            order.notes.user_id as string,
-            order.notes.plan_id as string,
-            paymentId
-          );
+          try {
+            await activateSubscription(
+              order.notes.user_id as string,
+              order.notes.plan_id as string,
+              paymentId
+            );
+            debugStatus = 'ActivationSuccess';
+          } catch (actErr: any) {
+            console.error('Activation error:', actErr);
+            debugStatus = 'ActivationFailed_' + (actErr.message || 'Unknown');
+          }
         } else {
           console.warn('[payment-redirect] No user_id/plan_id in order notes');
+          debugStatus = 'NoNotes_' + JSON.stringify(order.notes);
         }
       } else {
         console.error('[payment-redirect] Invalid Signature');
+        debugStatus = 'SigFailed';
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('[payment-redirect] Error processing success:', err);
+      debugStatus = 'ProcessingError_' + (err.message || 'Unknown');
     }
 
-    deepLink = `medplant://payment-success?razorpay_payment_id=${encodeURIComponent(paymentId)}&razorpay_order_id=${encodeURIComponent(orderId)}&razorpay_signature=${encodeURIComponent(signature)}`;
+    deepLink = `medplant://payment-success?razorpay_payment_id=${encodeURIComponent(paymentId)}&razorpay_order_id=${encodeURIComponent(orderId)}&razorpay_signature=${encodeURIComponent(signature)}&debug_status=${encodeURIComponent(debugStatus)}`;
   } else {
     deepLink = `medplant://payment-cancelled`;
   }
@@ -190,6 +198,7 @@ export default async function handler(req: any, res: any) {
 <body>
   <div>
     <h2>${paymentId ? '✅ Payment Successful!' : (error ? '❌ Payment Failed' : 'Returning to App...')}</h2>
+    <p style="font-size: 12px; margin-top: 5px; opacity: 0.8">${debugStatus}</p>
     <p>Redirecting back to MedPlant...</p>
     <a class="btn" href="${deepLink}">Return to App</a>
   </div>
