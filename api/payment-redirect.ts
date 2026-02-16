@@ -1,13 +1,95 @@
-/**
- * Payment Redirect Handler
- * 
- * Razorpay POSTs here after payment success (via callback_url).
- * This endpoint does a 302 redirect to the medplant:// deep link,
- * which Chrome Custom Tabs intercepts and returns control to the app.
- * 
- * This is more reliable than client-side window.location.href for
- * custom scheme redirects on Android.
- */
+import { createClient } from '@supabase/supabase-js';
+import Razorpay from 'razorpay';
+import crypto from 'crypto';
+
+// Initialize Supabase with Service Role Key for Admin Access
+const supabase = createClient(
+  process.env.SUPABASE_URL as string,
+  process.env.SUPABASE_SERVICE_ROLE_KEY as string,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  }
+);
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID as string,
+  key_secret: process.env.RAZORPAY_KEY_SECRET as string,
+});
+
+/* ---------- ACTIVATION LOGIC ---------- */
+async function activateSubscription(userId: string, planId: string, paymentId: string) {
+  console.log(`[payment-redirect] Activating ${planId} for ${userId}`);
+  const now = new Date();
+
+  try {
+    // 1. Credit Packs
+    if (planId.startsWith('pack_')) {
+      let credits = 0;
+      switch (planId) {
+        case 'pack_1': credits = 1; break;
+        case 'pack_10': credits = 10; break;
+        case 'pack_20': credits = 20; break;
+        case 'pack_30': credits = 30; break;
+        default: credits = 1;
+      }
+
+      // Fetch current
+      const { data: sub } = await supabase
+        .from('user_subscriptions')
+        .select('daily_credits') // Using daily_credits as balance based on app logic
+        .eq('user_id', userId)
+        .single();
+
+      const current = sub?.daily_credits || 0;
+      const newBalance = current + credits;
+
+      // Update
+      await supabase.from('user_subscriptions').upsert({
+        user_id: userId,
+        daily_credits: newBalance,
+        updated_at: now.toISOString()
+      }, { onConflict: 'user_id' });
+
+      console.log(`[payment-redirect] Added ${credits} credits. New balance: ${newBalance}`);
+    }
+
+    // 2. Pro Plans
+    else if (planId.startsWith('pro_')) {
+      const isYearly = planId.includes('yearly');
+      const days = isYearly ? 365 : 30;
+      const expires = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+      const credits = planId === 'pro_basic' ? 30 : 999999; // 30 for basic, unlimited for others
+
+      // Update Subscription
+      await supabase.from('user_subscriptions').upsert({
+        user_id: userId,
+        plan: planId,
+        is_pro: true,
+        daily_credits: credits,
+        subscription_id: paymentId,
+        plan_start_date: now.toISOString(),
+        plan_end_date: expires.toISOString(),
+        updated_at: now.toISOString(),
+      }, { onConflict: 'user_id' });
+
+      // Update Profile
+      await supabase.from('user_profiles').update({
+        is_pro: true,
+        pro_since: now.toISOString(),
+        pro_expires: expires.toISOString(),
+      }).eq('id', userId);
+
+      console.log(`[payment-redirect] Activated ${planId}`);
+    }
+  } catch (err) {
+    console.error('[payment-redirect] Activation Failed:', err);
+    // We don't block redirect, but we log the error
+  }
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
@@ -22,12 +104,44 @@ export default async function handler(req: any, res: any) {
 
   console.log('[payment-redirect] Received:', JSON.stringify({ paymentId, orderId, signature, error, status }));
 
-  // Build deep link URL
   let deepLink: string;
 
   if (error || status === 'failed') {
     deepLink = `medplant://payment-failed?error=${encodeURIComponent(error || 'Payment failed')}`;
   } else if (paymentId) {
+    // ---------------------------------------------------------
+    // SERVER-SIDE ACTIVATION (SECURE)
+    // ---------------------------------------------------------
+    try {
+      // 1. Verify Signature
+      const body = orderId + "|" + paymentId;
+      const expectedSignature = crypto
+        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET as string)
+        .update(body.toString())
+        .digest('hex');
+
+      if (expectedSignature === signature) {
+        console.log('[payment-redirect] Signature Verified. Fetching order...');
+        // 2. Fetch Order to get User Context
+        const order = await razorpay.orders.fetch(orderId);
+
+        if (order.notes && order.notes.user_id && order.notes.plan_id) {
+          // 3. Activate Subscription
+          await activateSubscription(
+            order.notes.user_id as string,
+            order.notes.plan_id as string,
+            paymentId
+          );
+        } else {
+          console.warn('[payment-redirect] No user_id/plan_id in order notes');
+        }
+      } else {
+        console.error('[payment-redirect] Invalid Signature');
+      }
+    } catch (err) {
+      console.error('[payment-redirect] Error processing success:', err);
+    }
+
     deepLink = `medplant://payment-success?razorpay_payment_id=${encodeURIComponent(paymentId)}&razorpay_order_id=${encodeURIComponent(orderId)}&razorpay_signature=${encodeURIComponent(signature)}`;
   } else {
     deepLink = `medplant://payment-cancelled`;

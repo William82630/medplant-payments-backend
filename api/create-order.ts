@@ -34,7 +34,7 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { amount, currency = 'INR' } = req.body;
+    const { amount, currency = 'INR', userId, planId } = req.body;
 
     if (!amount) {
       return res.status(400).json({ error: 'Amount is required' });
@@ -44,6 +44,10 @@ export default async function handler(req: any, res: any) {
     const orderParams: any = {
       amount: Number(amount),
       currency,
+      notes: {
+        user_id: userId,
+        plan_id: planId,
+      },
     };
 
     console.log('[create-order] Creating order with params:', JSON.stringify(orderParams));
