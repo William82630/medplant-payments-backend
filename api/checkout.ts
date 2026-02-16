@@ -8,6 +8,7 @@ export default async function handler(req: any, res: any) {
     return res.status(200).end();
   }
 
+  /* ---------- HTML Response (Robust Script Loading) ---------- */
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -53,6 +54,33 @@ export default async function handler(req: any, res: any) {
       text-decoration: none;
     }
   </style>
+  <script>
+    // 1. Setup Global Error Handlers & Params
+    var params = new URLSearchParams(window.location.search);
+    var callback = params.get('callback');
+    if (!callback || callback === 'null' || callback === 'undefined') {
+      callback = 'medplant://payment-success';
+    }
+    var cancelUrl = callback.replace('payment-success', 'payment-cancelled');
+    var failBaseUrl = callback.replace('payment-success', 'payment-failed');
+
+    function showError(msg) {
+      console.error('[Checkout] Error:', msg);
+      var el = document.getElementById('content');
+      if (el) {
+        el.innerHTML =
+          '<h2>Payment Error</h2>' +
+          '<p class="error">' + msg + '</p>' +
+          '<a class="btn" href="' + failBaseUrl + '?error=' + encodeURIComponent(msg) + '">Return to App</a>';
+      }
+    }
+
+    // Redirect Razorpay's alert() calls
+    window.alert = function(msg) {
+      console.warn('[Checkout] Razorpay alert:', msg);
+      showError(msg);
+    };
+  </script>
 </head>
 <body>
   <div class="container" id="content">
@@ -60,57 +88,39 @@ export default async function handler(req: any, res: any) {
     <h2>Loading Payment...</h2>
     <p>Please wait while we set up your secure checkout.</p>
   </div>
+
   <script>
-    // Redirect Razorpay's alert() calls to show as visible errors on the page
-    window.alert = function(msg) {
-      console.warn('[Checkout] Razorpay alert:', msg);
+    // 2. Start Safety Timeout IMMEDIATELY
+    // This runs before anything else tries to load
+    var safetyTimeout = setTimeout(function() {
+      // If content still has loader, it means we're stuck
       var el = document.getElementById('content');
-      if (el) {
-        el.innerHTML =
-          '<h2>Payment Error</h2>' +
-          '<p class="error">' + msg + '</p>' +
-          '<a class="btn" href="medplant://payment-failed?error=' + encodeURIComponent(msg) + '">Return to App</a>';
+      if (el && el.innerHTML.indexOf('loader') !== -1) {
+        showError('Payment gateway connection timed out. Internet issue?');
       }
-    };
-    window.confirm = function(msg) { console.warn('[Checkout] Suppressed confirm:', msg); return true; };
-    window.prompt = function(msg) { console.warn('[Checkout] Suppressed prompt:', msg); return null; };
-  <\\/script>
-  <script src="https://checkout.razorpay.com/v1/checkout.js"><\\/script>
-  <script>
-    var params = new URLSearchParams(window.location.search);
-    var key = params.get('key');
-    var order_id = params.get('order_id');
-    var amount = params.get('amount');
-    var currency = params.get('currency') || 'INR';
-    var name = params.get('name') || 'MedPlant';
-    var description = params.get('description') || 'Pro Subscription';
-    var email = params.get('email') || '';
-    var callback = params.get('callback');
-    var redirect_url = params.get('redirect_url');
-    if (!callback || callback === 'null' || callback === 'undefined') {
-      callback = 'medplant://payment-success';
-    }
-    var cancelUrl = callback.replace('payment-success', 'payment-cancelled');
-    var failBaseUrl = callback.replace('payment-success', 'payment-failed');
+    }, 15000); // 15 seconds
 
-    console.log('[Checkout] Params:', JSON.stringify({key: key, order_id: order_id, redirect_url: redirect_url, email: email}));
+    // 3. Define Main Logic
+    function startPayment() {
+      var key = params.get('key');
+      var order_id = params.get('order_id');
+      var name = params.get('name') || 'MedPlant';
+      var description = params.get('description') || 'Pro Subscription';
+      var email = params.get('email') || '';
+      var redirect_url = params.get('redirect_url');
 
-    function showError(msg) {
-      document.getElementById('content').innerHTML =
-        '<h2>Payment Error</h2>' +
-        '<p class="error">' + msg + '</p>' +
-        '<a class="btn" href="' + failBaseUrl + '?error=' + encodeURIComponent(msg) + '">Return to App</a>';
-    }
+      console.log('[Checkout] Starting with:', JSON.stringify({key, order_id, redirect_url}));
 
-    if (!key || !order_id) {
-      showError('Missing payment details. Please try again from the app.');
-    } else {
-      var rzpOpened = false;
-      var safetyTimeout = setTimeout(function() {
-        if (!rzpOpened) {
-          showError('Payment gateway timed out. Please close this page and try again.');
-        }
-      }, 15000);
+      if (!key || !order_id) {
+        clearTimeout(safetyTimeout);
+        showError('Missing payment details. Please try again.');
+        return;
+      }
+
+      if (typeof Razorpay === 'undefined') {
+        showError('Razorpay SDK failed to load.');
+        return;
+      }
 
       try {
         var options = {
@@ -131,19 +141,17 @@ export default async function handler(req: any, res: any) {
           }
         };
 
-        // Mobile flow: use callback_url for reliable redirect via server
-        // Web flow: use handler for inline success handling
         if (redirect_url) {
           options.callback_url = redirect_url;
-          console.log('[Checkout] Using callback_url (mobile):', redirect_url);
+          console.log('[Checkout] Using callback_url (mobile)');
         } else {
           options.handler = function(response) {
-            rzpOpened = true;
             clearTimeout(safetyTimeout);
             var successUrl = callback +
               '?razorpay_payment_id=' + encodeURIComponent(response.razorpay_payment_id) +
               '&razorpay_order_id=' + encodeURIComponent(response.razorpay_order_id) +
               '&razorpay_signature=' + encodeURIComponent(response.razorpay_signature);
+            
             document.getElementById('content').innerHTML =
               '<h2>Payment Successful!</h2>' +
               '<p>Redirecting back to MedPlant...</p>' +
@@ -156,29 +164,37 @@ export default async function handler(req: any, res: any) {
         var rzp = new Razorpay(options);
         rzp.on('payment.failed', function(response) {
           clearTimeout(safetyTimeout);
-          var failUrl = failBaseUrl +
-            '?error=' + encodeURIComponent(response.error.description) +
-            '&code=' + encodeURIComponent(response.error.code);
           showError(response.error.description);
-          var btn = document.querySelector('.btn');
-          if (btn) btn.href = failUrl;
         });
-        setTimeout(function() {
-          try {
-            rzp.open();
-            rzpOpened = true;
-            clearTimeout(safetyTimeout);
-          } catch (openErr) {
-            showError('Failed to open payment: ' + openErr.message);
-            clearTimeout(safetyTimeout);
-          }
-        }, 500);
+
+        // Open
+        rzp.open();
+        
+        // Clear safety timeout only if modal opened typically... 
+        // actually keep it until interaction or dismiss to be safe? 
+        // No, rzp.open() is sync-ish.
+        console.log('[Checkout] rzp.open() called');
+        
       } catch (e) {
-        clearTimeout(safetyTimeout);
-        showError('Failed to initialize payment: ' + e.message);
+        showError('Init error: ' + e.message);
       }
     }
-  <\\/script>
+  </script>
+
+  <!-- 4. Load Script Dynamically with Error Handling -->
+  <script>
+    var script = document.createElement('script');
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.onload = function() {
+      console.log('[Checkout] Script loaded');
+      startPayment();
+    };
+    script.onerror = function() {
+      console.error('[Checkout] Script load failed');
+      showError('Failed to load payment gateway script. Check connection.');
+    };
+    document.head.appendChild(script);
+  </script>
 </body>
 </html>`;
 
