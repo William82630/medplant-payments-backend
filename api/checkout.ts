@@ -61,8 +61,17 @@ export default async function handler(req: any, res: any) {
     <p>Please wait while we set up your secure checkout.</p>
   </div>
   <script>
-    // Suppress ALL alert/confirm/prompt popups — Razorpay checkout.js uses alert() on errors
-    window.alert = function(msg) { console.warn('[Checkout] Suppressed alert:', msg); };
+    // Redirect Razorpay's alert() calls to show as visible errors on the page
+    window.alert = function(msg) {
+      console.warn('[Checkout] Razorpay alert:', msg);
+      var el = document.getElementById('content');
+      if (el) {
+        el.innerHTML =
+          '<h2>Payment Error</h2>' +
+          '<p class="error">' + msg + '</p>' +
+          '<a class="btn" href="medplant://payment-failed?error=' + encodeURIComponent(msg) + '">Return to App</a>';
+      }
+    };
     window.confirm = function(msg) { console.warn('[Checkout] Suppressed confirm:', msg); return true; };
     window.prompt = function(msg) { console.warn('[Checkout] Suppressed prompt:', msg); return null; };
   <\\/script>
@@ -89,15 +98,22 @@ export default async function handler(req: any, res: any) {
       document.getElementById('content').innerHTML =
         '<h2>Payment Error</h2>' +
         '<p class="error">' + msg + '</p>' +
-        '<a class="btn" href="' + failBaseUrl + '">Return to App</a>';
+        '<a class="btn" href="' + failBaseUrl + '?error=' + encodeURIComponent(msg) + '">Return to App</a>';
     }
 
     if (!key || !order_id) {
       showError('Missing payment details. Please try again from the app.');
     } else {
+      // Safety timeout — if Razorpay modal doesn't appear within 15 seconds, show error
+      var rzpOpened = false;
+      var safetyTimeout = setTimeout(function() {
+        if (!rzpOpened) {
+          console.error('[Checkout] Razorpay modal did not open within 15s');
+          showError('Payment gateway timed out. Please close this page and try again.');
+        }
+      }, 15000);
+
       try {
-        // Razorpay options — when order_id is provided, Razorpay fetches amount/currency from the order.
-        // Do NOT pass amount separately to avoid mismatch errors.
         var options = {
           key: key,
           order_id: order_id,
@@ -106,6 +122,8 @@ export default async function handler(req: any, res: any) {
           prefill: { email: email },
           theme: { color: '#00C896' },
           handler: function(response) {
+            rzpOpened = true;
+            clearTimeout(safetyTimeout);
             console.log('[Checkout] Payment success:', JSON.stringify(response));
             var successUrl = callback +
               '?razorpay_payment_id=' + encodeURIComponent(response.razorpay_payment_id) +
@@ -119,6 +137,7 @@ export default async function handler(req: any, res: any) {
           },
           modal: {
             ondismiss: function() {
+              clearTimeout(safetyTimeout);
               console.log('[Checkout] Modal dismissed by user');
               document.getElementById('content').innerHTML =
                 '<h2>Payment Cancelled</h2>' +
@@ -130,6 +149,7 @@ export default async function handler(req: any, res: any) {
         console.log('[Checkout] Razorpay options:', JSON.stringify(options));
         var rzp = new Razorpay(options);
         rzp.on('payment.failed', function(response) {
+          clearTimeout(safetyTimeout);
           console.error('[Checkout] Payment failed:', JSON.stringify(response.error));
           var failUrl = failBaseUrl +
             '?error=' + encodeURIComponent(response.error.description) +
@@ -137,8 +157,19 @@ export default async function handler(req: any, res: any) {
           showError(response.error.description);
           document.querySelector('.btn').href = failUrl;
         });
-        setTimeout(function() { rzp.open(); }, 500);
+        setTimeout(function() {
+          try {
+            rzp.open();
+            rzpOpened = true;
+            clearTimeout(safetyTimeout);
+          } catch (openErr) {
+            console.error('[Checkout] rzp.open() error:', openErr);
+            showError('Failed to open payment: ' + openErr.message);
+            clearTimeout(safetyTimeout);
+          }
+        }, 500);
       } catch (e) {
+        clearTimeout(safetyTimeout);
         console.error('[Checkout] Init error:', e);
         showError('Failed to initialize payment: ' + e.message);
       }
