@@ -38,7 +38,7 @@ async function activateSubscription(userId: string, planId: string, paymentId: s
     // Fetch current
     const { data: sub } = await supabase
       .from('user_subscriptions')
-      .select('daily_credits') // Using daily_credits as balance based on app logic
+      .select('daily_credits')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -46,12 +46,15 @@ async function activateSubscription(userId: string, planId: string, paymentId: s
     const newBalance = current + credits;
 
     // Update
-    await supabase.from('user_subscriptions').upsert({
+    const { error: packError } = await supabase.from('user_subscriptions').upsert({
       user_id: userId,
       daily_credits: newBalance,
       updated_at: now.toISOString()
     }, { onConflict: 'user_id' });
 
+    if (packError) {
+      throw new Error(`CreditPack upsert failed: ${packError.message} | code=${packError.code}`);
+    }
     console.log(`[payment-redirect] Added ${credits} credits. New balance: ${newBalance}`);
   }
 
@@ -60,7 +63,7 @@ async function activateSubscription(userId: string, planId: string, paymentId: s
     const isYearly = planId.includes('yearly');
     const days = isYearly ? 365 : 30;
     const expires = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-    const credits = planId === 'pro_basic' ? 10 : 100; // 10 for basic, 100 fair-use for unlimited
+    const credits = planId === 'pro_basic' ? 10 : 100;
 
     console.log(`[payment-redirect] PLAN MAPPING: planId="${planId}" isYearly=${isYearly} days=${days} credits=${credits}`);
 
@@ -77,10 +80,9 @@ async function activateSubscription(userId: string, planId: string, paymentId: s
     }, { onConflict: 'user_id' });
 
     if (subError) {
-      console.error(`[payment-redirect] Subscription upsert FAILED for planId="${planId}":`, subError);
-    } else {
-      console.log(`[payment-redirect] Subscription upsert SUCCESS for planId="${planId}"`);
+      throw new Error(`Sub upsert failed: ${subError.message} | code=${subError.code} | planId=${planId}`);
     }
+    console.log(`[payment-redirect] Subscription upsert SUCCESS for planId="${planId}"`);
 
     // Update Profile
     const { error: profileError } = await supabase.from('user_profiles').update({
@@ -90,14 +92,15 @@ async function activateSubscription(userId: string, planId: string, paymentId: s
     }).eq('id', userId);
 
     if (profileError) {
-      console.error(`[payment-redirect] Profile update FAILED:`, profileError);
+      // Log but don't throw — subscription was already activated
+      console.error(`[payment-redirect] Profile update FAILED (non-fatal):`, profileError);
     } else {
       console.log(`[payment-redirect] Profile update SUCCESS`);
     }
 
     console.log(`[payment-redirect] Activated ${planId} (isYearly=${isYearly}, credits=${credits})`);
   } else {
-    console.warn(`[payment-redirect] UNKNOWN planId="${planId}" — no activation performed!`);
+    throw new Error(`UNKNOWN planId="${planId}" — no activation path`);
   }
 }
 
