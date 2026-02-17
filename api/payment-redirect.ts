@@ -21,7 +21,7 @@ const razorpay = new Razorpay({
 
 /* ---------- ACTIVATION LOGIC ---------- */
 async function activateSubscription(userId: string, planId: string, paymentId: string) {
-  console.log(`[payment-redirect] Activating ${planId} for ${userId}`);
+  console.log(`[payment-redirect] activateSubscription called. userId=${userId}, planId="${planId}", paymentId=${paymentId}`);
   const now = new Date();
 
   // 1. Credit Packs
@@ -60,10 +60,12 @@ async function activateSubscription(userId: string, planId: string, paymentId: s
     const isYearly = planId.includes('yearly');
     const days = isYearly ? 365 : 30;
     const expires = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-    const credits = planId === 'pro_basic' ? 30 : 999999; // 30 for basic, unlimited for others
+    const credits = planId === 'pro_basic' ? 10 : 100; // 10 for basic, 100 fair-use for unlimited
+
+    console.log(`[payment-redirect] PLAN MAPPING: planId="${planId}" isYearly=${isYearly} days=${days} credits=${credits}`);
 
     // Update Subscription
-    await supabase.from('user_subscriptions').upsert({
+    const { error: subError } = await supabase.from('user_subscriptions').upsert({
       user_id: userId,
       plan: planId,
       is_pro: true,
@@ -74,14 +76,28 @@ async function activateSubscription(userId: string, planId: string, paymentId: s
       updated_at: now.toISOString(),
     }, { onConflict: 'user_id' });
 
+    if (subError) {
+      console.error(`[payment-redirect] Subscription upsert FAILED for planId="${planId}":`, subError);
+    } else {
+      console.log(`[payment-redirect] Subscription upsert SUCCESS for planId="${planId}"`);
+    }
+
     // Update Profile
-    await supabase.from('user_profiles').update({
+    const { error: profileError } = await supabase.from('user_profiles').update({
       is_pro: true,
       pro_since: now.toISOString(),
       pro_expires: expires.toISOString(),
     }).eq('id', userId);
 
-    console.log(`[payment-redirect] Activated ${planId}`);
+    if (profileError) {
+      console.error(`[payment-redirect] Profile update FAILED:`, profileError);
+    } else {
+      console.log(`[payment-redirect] Profile update SUCCESS`);
+    }
+
+    console.log(`[payment-redirect] Activated ${planId} (isYearly=${isYearly}, credits=${credits})`);
+  } else {
+    console.warn(`[payment-redirect] UNKNOWN planId="${planId}" — no activation performed!`);
   }
 }
 

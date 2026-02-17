@@ -170,10 +170,11 @@ export default async function handler(req: any, res: any) {
         // Open
         rzp.open();
         
-        // Clear safety timeout only if modal opened typically... 
-        // actually keep it until interaction or dismiss to be safe? 
-        // No, rzp.open() is sync-ish.
-        console.log('[Checkout] rzp.open() called');
+        // Clear safety timeout as soon as modal opens.
+        // In the callback_url path (mobile), there is no handler to clear it,
+        // so we must clear it here to prevent false "timed out" errors.
+        clearTimeout(safetyTimeout);
+        console.log('[Checkout] rzp.open() called, safetyTimeout cleared');
         
       } catch (e) {
         showError('Init error: ' + e.message);
