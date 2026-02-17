@@ -20,8 +20,26 @@ const razorpay = new Razorpay({
 });
 
 /* ---------- ACTIVATION LOGIC ---------- */
+
+/**
+ * IMPORTANT: The `user_subscriptions.plan` column has a CHECK constraint
+ * (`user_subscriptions_plan_check`) that only allows values listed below.
+ *
+ * If you add a NEW plan, you MUST also update the Supabase CHECK constraint:
+ *   ALTER TABLE user_subscriptions DROP CONSTRAINT user_subscriptions_plan_check;
+ *   ALTER TABLE user_subscriptions ADD CONSTRAINT user_subscriptions_plan_check
+ *     CHECK (plan IN ('free', 'pro_basic', 'pro_unlimited', 'pro_unlimited_yearly', 'pay_per_scan'));
+ */
+const VALID_PLANS = ['free', 'pro_basic', 'pro_unlimited', 'pro_unlimited_yearly', 'pay_per_scan'];
+
 async function activateSubscription(userId: string, planId: string, paymentId: string) {
   console.log(`[payment-redirect] activateSubscription called. userId=${userId}, planId="${planId}", paymentId=${paymentId}`);
+
+  // Validate plan ID upfront (credit packs are validated separately)
+  if (!planId.startsWith('pack_') && !VALID_PLANS.includes(planId)) {
+    throw new Error(`Invalid planId="${planId}". Must be one of: ${VALID_PLANS.join(', ')}. Did you forget to update the VALID_PLANS list and Supabase CHECK constraint?`);
+  }
+
   const now = new Date();
 
   // 1. Credit Packs
