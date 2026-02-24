@@ -67,10 +67,24 @@ export default async function handler(req: any, res: any) {
     let paymentId = 'verify_' + orderId;
     try {
       const payments = await razorpay.orders.fetchPayments(orderId);
-      const captured = (payments as any).items?.find((p: any) => p.status === 'captured');
-      if (captured) paymentId = captured.id;
-    } catch (e) {
-      console.warn('[verify-payment] Could not fetch payments for order:', e);
+      console.log('[verify-payment] fetchPayments raw type:', typeof payments, Array.isArray(payments));
+
+      // Razorpay SDK may return { items: [...] } or the array directly
+      const paymentsList: any[] = Array.isArray(payments)
+        ? payments
+        : (payments as any).items || (payments as any).entities || [];
+
+      console.log('[verify-payment] paymentsList length:', paymentsList.length);
+
+      const captured = paymentsList.find((p: any) => p.status === 'captured');
+      if (captured) {
+        paymentId = captured.id;
+        console.log('[verify-payment] Found captured paymentId:', paymentId);
+      } else {
+        console.log('[verify-payment] No captured payment found, using fallback:', paymentId);
+      }
+    } catch (e: any) {
+      console.warn('[verify-payment] Could not fetch payments for order:', e?.message || e);
     }
 
     // ─── Idempotency check: see if this payment was already activated ───
@@ -84,6 +98,9 @@ export default async function handler(req: any, res: any) {
       console.log(`[verify-payment] Payment ${paymentId} already activated. Skipping.`);
       return res.status(200).json({ paid: true, activated: true, skipped: true });
     }
+
+    console.log(`[verify-payment] ACTIVATING: userId=${userId}, planId=${planId}, paymentId=${paymentId}`);
+    console.log(`[verify-payment] existingSub:`, JSON.stringify(existingSub));
 
     // ─── Activate ────────────────────────────────────────────────────
     try {
