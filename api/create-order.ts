@@ -36,8 +36,16 @@ export default async function handler(req: any, res: any) {
   try {
     const { amount, currency = 'INR', userId, planId } = req.body;
 
-    if (!amount) {
-      return res.status(400).json({ error: 'Amount is required' });
+    if (!amount || !userId || !planId) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    /* ---------- BASE URL (IMPORTANT) ---------- */
+    const BASE_URL = process.env.BASE_URL;
+
+    if (!BASE_URL) {
+      console.error('[create-order] BASE_URL not defined');
+      return res.status(500).json({ error: 'Server misconfiguration: BASE_URL missing' });
     }
 
     /* ---------- ORDER CREATION ---------- */
@@ -48,6 +56,8 @@ export default async function handler(req: any, res: any) {
         user_id: userId,
         plan_id: planId,
       },
+      callback_url: `${BASE_URL}/api/payment-redirect`,
+      callback_method: 'get',
     };
 
     console.log('[create-order] Creating order with params:', JSON.stringify(orderParams));
@@ -80,6 +90,9 @@ export default async function handler(req: any, res: any) {
 
   } catch (err: any) {
     console.error('[create-order] ERROR:', err?.error || err?.message || err);
-    return res.status(500).json({ error: 'Failed to create order', details: err?.error?.description || err?.message });
+    return res.status(500).json({
+      error: 'Failed to create order',
+      details: err?.error?.description || err?.message
+    });
   }
 }
