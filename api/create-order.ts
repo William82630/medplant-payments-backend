@@ -56,8 +56,6 @@ export default async function handler(req: any, res: any) {
         user_id: userId,
         plan_id: planId,
       },
-      callback_url: `${BASE_URL}/api/payment-redirect`,
-      callback_method: 'get',
     };
 
     console.log('[create-order] Creating order with params:', JSON.stringify(orderParams));
