@@ -66,7 +66,10 @@ async function activateSubscription(userId: string, planId: string, paymentId: s
     // Update
     const { error: packError } = await supabase.from('user_subscriptions').upsert({
       user_id: userId,
+      plan: 'pay_per_scan',
+      is_pro: false,
       daily_credits: newBalance,
+      subscription_id: paymentId,
       updated_at: now.toISOString()
     }, { onConflict: 'user_id' });
 
